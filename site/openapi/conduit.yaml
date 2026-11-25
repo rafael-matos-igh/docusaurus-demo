@@ -1,0 +1,956 @@
+openapi: 3.0.3
+info:
+  title: Conduit Integration API
+  version: 1.0.0
+  description: |
+    Conduit is a channel-agnostic integration layer in front of the **Meridian Core**
+    insurance management backend. Any client application (a mobile app,
+    a broker system or a partner service) can use the same API to manage clients,
+    run quote journeys, calculate premiums, convert quotes into policies, change
+    policies and raise tasks.
+
+    ## Conventions
+
+    - All requests and responses use JSON (`application/json`).
+    - Authenticate every request with an OAuth 2.0 bearer token.
+    - Send an `Idempotency-Key` header on every `POST` and `PATCH` that creates or changes data.
+    - Money amounts are objects with an `amount` (decimal string) and an ISO 4217 `currency`.
+    - Dates use ISO 8601 (`2026-03-01`, `2026-03-01T09:30:00Z`).
+    - Errors use a single envelope, see the `Error` schema.
+servers:
+  - url: https://conduit.example.com/v1
+    description: Production
+  - url: https://conduit.sandbox.example.com/v1
+    description: Sandbox
+tags:
+  - name: Clients
+    description: Create, search and change client records.
+  - name: Quote journeys
+    description: Retrieve the form definition for a product and validate answers.
+  - name: Quotes
+    description: Create quotes, calculate premiums and convert quotes into policies.
+  - name: Premium calculations
+    description: Stateless premium calculation without creating a quote.
+  - name: Policies
+    description: Read policies and request policy mutations.
+  - name: Tasks
+    description: Raise and track work items for back-office staff.
+security:
+  - oauth2: [clients, quotes, policies, tasks]
+paths:
+  /clients:
+    get:
+      tags: [Clients]
+      operationId: searchClients
+      summary: Search clients
+      description: Finds clients by email, phone number, or name. At least one filter is required.
+      parameters:
+        - name: email
+          in: query
+          schema: {type: string, format: email}
+        - name: phone
+          in: query
+          schema: {type: string, example: '+441632960123'}
+        - name: name
+          in: query
+          description: Case-insensitive partial match on the full name or company name.
+          schema: {type: string}
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of matching clients.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Client'}
+                  nextCursor:
+                    type: string
+                    nullable: true
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [Clients]
+      operationId: createClient
+      summary: Create a client
+      description: |
+        Creates a client in Meridian Core. If a client with the same email and date of birth
+        (individuals) or registration number (companies) already exists, the request
+        fails with `409` and the existing client's id in `details.existingClientId`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateClient'}
+      responses:
+        '201':
+          description: The created client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Client'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /clients/{clientId}:
+    parameters:
+      - $ref: '#/components/parameters/ClientId'
+    get:
+      tags: [Clients]
+      operationId: getClient
+      summary: Get a client
+      responses:
+        '200':
+          description: The client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Client'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Clients]
+      operationId: updateClient
+      summary: Change a client
+      description: |
+        Applies a partial update. Only the fields you send are changed. Changes to
+        `legalName`, `dateOfBirth` or `registrationNumber` are not applied immediately:
+        Conduit raises a verification task and returns `202`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateClient'}
+      responses:
+        '200':
+          description: The change was applied.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Client'}
+        '202':
+          description: The change needs verification. A task was raised.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PendingChange'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /quote-journeys/{productCode}:
+    get:
+      tags: [Quote journeys]
+      operationId: getQuoteJourney
+      summary: Get the quote journey form
+      description: |
+        Returns the ordered steps, fields, options and rules that a client application must
+        present to collect the answers needed to quote a product. The definition is
+        generated from Meridian Core's product configuration, so it changes when the
+        product changes, not when your application is released.
+      parameters:
+        - $ref: '#/components/parameters/ProductCode'
+        - name: locale
+          in: query
+          description: Language for labels and help text.
+          schema: {type: string, default: en-GB, example: en-GB}
+      responses:
+        '200':
+          description: The journey definition.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/QuoteJourney'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /quote-journeys/{productCode}/validate:
+    post:
+      tags: [Quote journeys]
+      operationId: validateQuoteAnswers
+      summary: Validate journey answers
+      description: |
+        Validates a set of answers against the journey's rules without creating a quote.
+        Use it to give feedback after each step.
+      parameters:
+        - $ref: '#/components/parameters/ProductCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                step:
+                  type: string
+                  description: Validate only the fields of this step. Omit to validate all answers.
+                  example: vehicle
+                answers: {$ref: '#/components/schemas/Answers'}
+      responses:
+        '200':
+          description: The validation result.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ValidationResult'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /quotes:
+    post:
+      tags: [Quotes]
+      operationId: createQuote
+      summary: Create a quote
+      description: |
+        Creates a quote for a client from journey answers. The quote is created in the
+        `draft` state. If the answers are complete, Conduit also calculates a premium
+        and moves the quote to `quoted`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateQuote'}
+      responses:
+        '201':
+          description: The created quote.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Quote'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /quotes/{quoteId}:
+    parameters:
+      - $ref: '#/components/parameters/QuoteId'
+    get:
+      tags: [Quotes]
+      operationId: getQuote
+      summary: Get a quote
+      responses:
+        '200':
+          description: The quote.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Quote'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Quotes]
+      operationId: updateQuote
+      summary: Change quote answers
+      description: |
+        Merges new answers into a quote that is `draft` or `quoted`. Any existing
+        premium is discarded and the quote returns to `draft` until the premium is
+        calculated again.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers: {$ref: '#/components/schemas/Answers'}
+      responses:
+        '200':
+          description: The updated quote.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Quote'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /quotes/{quoteId}/premium:
+    parameters:
+      - $ref: '#/components/parameters/QuoteId'
+    get:
+      tags: [Quotes]
+      operationId: getQuotePremium
+      summary: Get the premium for a quote
+      description: Returns the current premium, with its breakdown. Returns `404` if the quote has not been priced yet.
+      responses:
+        '200':
+          description: The premium.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Premium'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [Quotes]
+      operationId: calculateQuotePremium
+      summary: Calculate the premium for a quote
+      description: |
+        Asks Meridian Core's rating engine to price the quote and stores the result.
+        The premium is valid until `validUntil`. Optional covers and a payment frequency
+        can be chosen here.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PremiumOptions'}
+      responses:
+        '200':
+          description: The calculated premium.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Premium'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '502': {$ref: '#/components/responses/BackendUnavailable'}
+  /quotes/{quoteId}/convert:
+    post:
+      tags: [Quotes]
+      operationId: convertQuote
+      summary: Convert a quote to a policy
+      description: |
+        Binds a `quoted` quote into a policy in Meridian Core. The premium must still be
+        valid. Conversion is idempotent: repeating the call with the same
+        `Idempotency-Key` returns the same policy.
+      parameters:
+        - $ref: '#/components/parameters/QuoteId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConvertQuote'}
+      responses:
+        '201':
+          description: The new policy.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Policy'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '502': {$ref: '#/components/responses/BackendUnavailable'}
+  /premium-calculations:
+    post:
+      tags: [Premium calculations]
+      operationId: calculatePremium
+      summary: Calculate a premium without a quote
+      description: |
+        Prices a set of answers directly. Nothing is stored, so it is suited to
+        "from" prices and comparison screens. The result cannot be converted to a policy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productCode, answers]
+              properties:
+                productCode: {type: string, example: motor-comprehensive}
+                answers: {$ref: '#/components/schemas/Answers'}
+                options: {$ref: '#/components/schemas/PremiumOptions'}
+      responses:
+        '200':
+          description: The calculated premium.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Premium'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '502': {$ref: '#/components/responses/BackendUnavailable'}
+  /policies/{policyId}:
+    parameters:
+      - $ref: '#/components/parameters/PolicyId'
+    get:
+      tags: [Policies]
+      operationId: getPolicy
+      summary: Get a policy
+      responses:
+        '200':
+          description: The policy.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Policy'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /policies/{policyId}/mutations:
+    parameters:
+      - $ref: '#/components/parameters/PolicyId'
+    get:
+      tags: [Policies]
+      operationId: listPolicyMutations
+      summary: List policy mutations
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of mutations, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/PolicyMutation'}
+                  nextCursor:
+                    type: string
+                    nullable: true
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [Policies]
+      operationId: createPolicyMutation
+      summary: Request a policy mutation
+      description: |
+        Requests a change to an in-force policy, such as a changed address, an added
+        driver, a change of cover or a cancellation. Use `preview: true` to see the
+        premium effect without committing the change.
+
+        Mutations that need underwriting review return `202` with the status
+        `pending_review` and a task.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePolicyMutation'}
+      responses:
+        '200':
+          description: The mutation was applied, or a preview was calculated.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyMutation'}
+        '202':
+          description: The mutation needs review and is pending.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyMutation'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '502': {$ref: '#/components/responses/BackendUnavailable'}
+  /policies/{policyId}/mutations/{mutationId}:
+    get:
+      tags: [Policies]
+      operationId: getPolicyMutation
+      summary: Get a policy mutation
+      parameters:
+        - $ref: '#/components/parameters/PolicyId'
+        - name: mutationId
+          in: path
+          required: true
+          schema: {type: string, example: mut_5d21}
+      responses:
+        '200':
+          description: The mutation.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyMutation'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /tasks:
+    post:
+      tags: [Tasks]
+      operationId: createTask
+      summary: Create a task
+      description: |
+        Raises a task for back-office staff in Meridian Core, optionally linked to a
+        client, quote or policy.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateTask'}
+      responses:
+        '201':
+          description: The created task.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /tasks/{taskId}:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema: {type: string, example: tsk_91c0}
+    get:
+      tags: [Tasks]
+      operationId: getTask
+      summary: Get a task
+      responses:
+        '200':
+          description: The task.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Tasks]
+      operationId: updateTask
+      summary: Change a task
+      description: Add a comment, change the priority, or cancel the task. Staff-only fields such as the assignee cannot be changed here.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                priority: {$ref: '#/components/schemas/TaskPriority'}
+                comment: {type: string, example: Customer sent the missing documents.}
+                status:
+                  type: string
+                  enum: [cancelled]
+      responses:
+        '200':
+          description: The updated task.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: OAuth 2.0 client credentials. Request only the scopes your application needs.
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.conduit.example.com/oauth/token
+          scopes:
+            clients: Read and change clients
+            quotes: Run quote journeys, calculate premiums and convert quotes
+            policies: Read policies and request mutations
+            tasks: Create and read tasks
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: A unique value (a UUID is recommended) that makes a retry safe. Reusing a key with a different body returns `409`.
+      schema: {type: string, example: 7c9e6679-7425-40de-944b-e07fc1f90ae7}
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      schema: {type: string, example: cli_2f7a}
+    QuoteId:
+      name: quoteId
+      in: path
+      required: true
+      schema: {type: string, example: qte_8f2a1c}
+    PolicyId:
+      name: policyId
+      in: path
+      required: true
+      schema: {type: string, example: pol_77b3}
+    ProductCode:
+      name: productCode
+      in: path
+      required: true
+      description: Product identifier from Meridian Core.
+      schema: {type: string, example: motor-comprehensive}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from `nextCursor` of the previous page.
+      schema: {type: string}
+  responses:
+    BadRequest:
+      description: The request is malformed.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Missing, expired or insufficient credentials.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: The resource does not exist.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: The request conflicts with the current state, or an idempotency key was reused with a different body.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unprocessable:
+      description: The request is well formed but fails business validation.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    BackendUnavailable:
+      description: Meridian Core did not answer in time or returned an unexpected failure. Safe to retry with the same idempotency key.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: {type: string, description: Decimal string., example: '412.50'}
+        currency: {type: string, example: GBP}
+    Address:
+      type: object
+      required: [line1, city, postalCode, country]
+      properties:
+        line1: {type: string, example: 12 Harbour Road}
+        line2: {type: string}
+        city: {type: string, example: Bristol}
+        postalCode: {type: string, example: BS1 4AB}
+        country: {type: string, description: ISO 3166-1 alpha-2., example: GB}
+    ClientType:
+      type: string
+      enum: [individual, company]
+    Client:
+      type: object
+      required: [id, type, email, createdAt]
+      properties:
+        id: {type: string, example: cli_2f7a}
+        type: {$ref: '#/components/schemas/ClientType'}
+        legalName: {type: string, example: Alex Morgan}
+        dateOfBirth: {type: string, format: date}
+        registrationNumber: {type: string, description: Companies only.}
+        email: {type: string, format: email}
+        phone: {type: string}
+        address: {$ref: '#/components/schemas/Address'}
+        marketingConsent: {type: boolean}
+        createdAt: {type: string, format: date-time}
+    CreateClient:
+      type: object
+      required: [type, legalName, email]
+      properties:
+        type: {$ref: '#/components/schemas/ClientType'}
+        legalName: {type: string, example: Alex Morgan}
+        dateOfBirth: {type: string, format: date, description: Required for individuals.}
+        registrationNumber: {type: string, description: Required for companies.}
+        email: {type: string, format: email}
+        phone: {type: string}
+        address: {$ref: '#/components/schemas/Address'}
+        marketingConsent: {type: boolean, default: false}
+    UpdateClient:
+      type: object
+      minProperties: 1
+      properties:
+        legalName: {type: string}
+        dateOfBirth: {type: string, format: date}
+        registrationNumber: {type: string}
+        email: {type: string, format: email}
+        phone: {type: string}
+        address: {$ref: '#/components/schemas/Address'}
+        marketingConsent: {type: boolean}
+    PendingChange:
+      type: object
+      required: [status, taskId]
+      properties:
+        status: {type: string, enum: [pending_review]}
+        taskId: {type: string, example: tsk_91c0}
+        message: {type: string, example: The change needs verification before it is applied.}
+    Answers:
+      type: object
+      description: |
+        Answers keyed by field `key` from the quote journey definition. Values are
+        strings, numbers, booleans or arrays, depending on the field type.
+      additionalProperties: true
+      example:
+        vehicle.registration: AB12 CDE
+        vehicle.value: 18500
+        driver.dateOfBirth: '1988-04-12'
+        cover.startDate: '2026-03-01'
+    QuoteJourney:
+      type: object
+      required: [productCode, version, steps]
+      properties:
+        productCode: {type: string, example: motor-comprehensive}
+        version: {type: string, description: Changes whenever the product configuration changes., example: '2026-02-14.3'}
+        steps:
+          type: array
+          items: {$ref: '#/components/schemas/JourneyStep'}
+    JourneyStep:
+      type: object
+      required: [key, title, fields]
+      properties:
+        key: {type: string, example: vehicle}
+        title: {type: string, example: Your vehicle}
+        description: {type: string}
+        showIf: {$ref: '#/components/schemas/Condition'}
+        fields:
+          type: array
+          items: {$ref: '#/components/schemas/JourneyField'}
+    JourneyField:
+      type: object
+      required: [key, label, type]
+      properties:
+        key: {type: string, example: vehicle.value}
+        label: {type: string, example: Estimated value}
+        type:
+          type: string
+          enum: [text, number, money, date, boolean, select, multiselect, address]
+        required: {type: boolean}
+        helpText: {type: string}
+        options:
+          type: array
+          description: Allowed values for `select` and `multiselect` fields.
+          items:
+            type: object
+            required: [value, label]
+            properties:
+              value: {type: string}
+              label: {type: string}
+        validation:
+          type: object
+          properties:
+            min: {type: number}
+            max: {type: number}
+            pattern: {type: string}
+            message: {type: string}
+        showIf: {$ref: '#/components/schemas/Condition'}
+    Condition:
+      type: object
+      description: Show the step or field only when the referenced answer matches.
+      required: [field, operator]
+      properties:
+        field: {type: string, example: driver.hasConvictions}
+        operator: {type: string, enum: [equals, notEquals, in, greaterThan, lessThan]}
+        value: {}
+    ValidationResult:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid: {type: boolean}
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, code, message]
+            properties:
+              field: {type: string, example: driver.dateOfBirth}
+              code: {type: string, example: too_young}
+              message: {type: string, example: Drivers must be at least 17.}
+        referrals:
+          type: array
+          description: Answers that are allowed but will need underwriting review.
+          items: {type: string}
+    CreateQuote:
+      type: object
+      required: [productCode, clientId, answers]
+      properties:
+        productCode: {type: string, example: motor-comprehensive}
+        clientId: {type: string, example: cli_2f7a}
+        answers: {$ref: '#/components/schemas/Answers'}
+        reference: {type: string, description: 'Your own reference, returned unchanged.', example: web-84211}
+    QuoteStatus:
+      type: string
+      enum: [draft, quoted, converted, expired, declined]
+    Quote:
+      type: object
+      required: [id, productCode, clientId, status, answers, createdAt]
+      properties:
+        id: {type: string, example: qte_8f2a1c}
+        productCode: {type: string}
+        clientId: {type: string}
+        status: {$ref: '#/components/schemas/QuoteStatus'}
+        reference: {type: string}
+        answers: {$ref: '#/components/schemas/Answers'}
+        premium: {$ref: '#/components/schemas/Premium'}
+        policyId:
+          type: string
+          nullable: true
+          description: Set once the quote is converted.
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+    PremiumOptions:
+      type: object
+      properties:
+        optionalCovers:
+          type: array
+          items: {type: string}
+          example: [legal-expenses, breakdown]
+        paymentFrequency:
+          type: string
+          enum: [annual, monthly]
+          default: annual
+        excess: {$ref: '#/components/schemas/Money'}
+    Premium:
+      type: object
+      required: [total, breakdown, validUntil]
+      properties:
+        total: {$ref: '#/components/schemas/Money'}
+        paymentFrequency: {type: string, enum: [annual, monthly]}
+        instalment:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: Per-instalment amount when paid monthly.
+        breakdown:
+          type: array
+          items:
+            type: object
+            required: [code, label, amount]
+            properties:
+              code: {type: string, example: base}
+              label: {type: string, example: Base premium}
+              amount: {$ref: '#/components/schemas/Money'}
+        validUntil: {type: string, format: date-time}
+        ratingVersion: {type: string, description: Version of the Meridian Core rating tables used., example: R-2026.02}
+    ConvertQuote:
+      type: object
+      required: [startDate, paymentFrequency, acceptedTerms]
+      properties:
+        startDate: {type: string, format: date, example: '2026-03-01'}
+        paymentFrequency: {type: string, enum: [annual, monthly]}
+        paymentToken:
+          type: string
+          description: Token from your payment provider. Conduit never receives card details.
+        acceptedTerms:
+          type: boolean
+          description: Must be true.
+    PolicyStatus:
+      type: string
+      enum: [pending, in_force, lapsed, cancelled, expired]
+    Policy:
+      type: object
+      required: [id, policyNumber, productCode, clientId, status, startDate, endDate]
+      properties:
+        id: {type: string, example: pol_77b3}
+        policyNumber: {type: string, example: MC-2026-004417}
+        productCode: {type: string}
+        clientId: {type: string}
+        quoteId: {type: string}
+        status: {$ref: '#/components/schemas/PolicyStatus'}
+        startDate: {type: string, format: date}
+        endDate: {type: string, format: date}
+        premium: {$ref: '#/components/schemas/Premium'}
+        covers:
+          type: array
+          items: {type: string}
+        documents:
+          type: array
+          items:
+            type: object
+            properties:
+              type: {type: string, example: schedule}
+              url: {type: string, format: uri}
+    MutationType:
+      type: string
+      enum: [change_address, add_driver, remove_driver, change_vehicle, change_cover, change_excess, cancel]
+    CreatePolicyMutation:
+      type: object
+      required: [type, effectiveDate]
+      properties:
+        type: {$ref: '#/components/schemas/MutationType'}
+        effectiveDate: {type: string, format: date, example: '2026-04-01'}
+        preview:
+          type: boolean
+          default: false
+          description: Calculate the premium effect only. Nothing is changed.
+        changes:
+          type: object
+          additionalProperties: true
+          description: Type-specific values. See the policy mutations guide.
+          example:
+            address:
+              line1: 4 Mill Lane
+              city: Bath
+              postalCode: BA1 2XY
+              country: GB
+        reason: {type: string, description: Required for `cancel`., example: Vehicle sold}
+    MutationStatus:
+      type: string
+      enum: [preview, applied, pending_review, rejected, failed]
+    PolicyMutation:
+      type: object
+      required: [id, policyId, type, status, effectiveDate]
+      properties:
+        id: {type: string, example: mut_5d21}
+        policyId: {type: string}
+        type: {$ref: '#/components/schemas/MutationType'}
+        status: {$ref: '#/components/schemas/MutationStatus'}
+        effectiveDate: {type: string, format: date}
+        premiumChange:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: Signed difference to the annual premium. Negative means a refund.
+        taskId:
+          type: string
+          nullable: true
+          description: Review task when status is `pending_review`.
+        rejectionReason: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+    TaskPriority:
+      type: string
+      enum: [low, normal, high, urgent]
+    TaskStatus:
+      type: string
+      enum: [open, in_progress, completed, cancelled]
+    CreateTask:
+      type: object
+      required: [type, title]
+      properties:
+        type: {type: string, example: callback_request, description: A task type configured in Meridian Core.}
+        title: {type: string, example: Customer asked for a callback}
+        description: {type: string}
+        priority: {$ref: '#/components/schemas/TaskPriority'}
+        dueDate: {type: string, format: date}
+        clientId: {type: string}
+        quoteId: {type: string}
+        policyId: {type: string}
+    Task:
+      type: object
+      required: [id, type, title, status, priority, createdAt]
+      properties:
+        id: {type: string, example: tsk_91c0}
+        type: {type: string}
+        title: {type: string}
+        description: {type: string}
+        status: {$ref: '#/components/schemas/TaskStatus'}
+        priority: {$ref: '#/components/schemas/TaskPriority'}
+        dueDate: {type: string, format: date}
+        clientId: {type: string}
+        quoteId: {type: string}
+        policyId: {type: string}
+        createdAt: {type: string, format: date-time}
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          description: Stable, machine-readable code.
+          example: quote_expired
+        message: {type: string, example: The premium has expired. Calculate it again before converting.}
+        requestId:
+          type: string
+          description: Quote this when contacting support.
+          example: req_01HZX4
+        details:
+          type: object
+          additionalProperties: true
+          description: Extra context, such as `fields` for validation errors.

@@ -3,8 +3,8 @@ import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
-  title: 'Nimbus Docs',
-  tagline: 'A minimal documentation site built with Docusaurus',
+  title: 'Conduit Docs',
+  tagline: 'Integration layer between client applications and the Meridian Core insurance backend',
   favicon: 'img/favicon.ico',
 
   future: {
@@ -25,6 +25,29 @@ const config: Config = {
     locales: ['en'],
   },
 
+  plugins: [
+    [
+      'docusaurus-plugin-openapi-docs',
+      {
+        id: 'api',
+        docsPluginId: 'classic',
+        config: {
+          conduit: {
+            specPath: 'openapi/conduit.yaml',
+            outputDir: 'docs/api',
+            sidebarOptions: {groupPathsBy: 'tag'},
+          },
+        },
+      },
+    ],
+  ],
+
+  markdown: {
+    mermaid: true,
+  },
+
+  themes: ['docusaurus-theme-openapi-docs', '@docusaurus/theme-mermaid'],
+
   presets: [
     [
       'classic',
@@ -33,6 +56,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
+          docItemComponent: '@theme/ApiItem',
         },
         blog: false,
         theme: {
@@ -47,7 +71,7 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Nimbus Docs',
+      title: 'Conduit Docs',
       logo: {
         alt: 'Logo',
         src: 'img/brand-logo.svg',
