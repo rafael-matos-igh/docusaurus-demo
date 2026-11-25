@@ -1,30 +1,102 @@
 /**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
+ * Brand palette derived from the banner: teal #0F5F68 -> navy #0B1B2A.
  */
-
-/* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
+  --brand-teal: #0f5f68;
+  --brand-navy: #0b1b2a;
+  --brand-grey: #999999;
+
+  --ifm-color-primary: #0f5f68;
+  --ifm-color-primary-dark: #0e565e;
+  --ifm-color-primary-darker: #0d525a;
+  --ifm-color-primary-darkest: #0a4249;
+  --ifm-color-primary-light: #126872;
+  --ifm-color-primary-lighter: #136c77;
+  --ifm-color-primary-lightest: #178490;
+
+  --ifm-background-color: #f6f9fa;
+  --ifm-font-color-base: #14283a;
+  --ifm-heading-color: #0b1b2a;
+  --ifm-link-hover-color: #0b1b2a;
   --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  --ifm-global-radius: 8px;
+  --ifm-navbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.08);
+  --docusaurus-highlighted-code-line-bg: rgba(15, 95, 104, 0.12);
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --ifm-color-primary: #4fc3cf;
+  --ifm-color-primary-dark: #35b9c6;
+  --ifm-color-primary-darker: #2fb2bf;
+  --ifm-color-primary-darkest: #26959f;
+  --ifm-color-primary-light: #69cdd7;
+  --ifm-color-primary-lighter: #77d2db;
+  --ifm-color-primary-lightest: #9fe0e6;
+
+  --ifm-background-color: #0b1b2a;
+  --ifm-background-surface-color: #102436;
+  --ifm-font-color-base: #d6e2ea;
+  --ifm-heading-color: #ffffff;
+  --ifm-link-hover-color: #9fe0e6;
+  --docusaurus-highlighted-code-line-bg: rgba(79, 195, 207, 0.15);
+}
+
+/* Navbar: always dark navy -> teal, matching the banner */
+.navbar {
+  background: linear-gradient(90deg, #0b1b2a 0%, #0f3f4b 60%, #0f5f68 100%);
+}
+.navbar,
+.navbar .navbar__title,
+.navbar .navbar__link,
+.navbar .navbar__item {
+  color: #ffffff;
+}
+.navbar .navbar__link:hover,
+.navbar .navbar__link--active {
+  color: #9fe0e6;
+}
+.navbar__toggle,
+.navbar .clean-btn {
+  color: #ffffff;
+}
+.navbar__logo img {
+  height: 1.75rem;
+}
+
+
+/* Sidebar + content polish */
+.menu__link--active:not(.menu__link--sublist) {
+  border-left: 3px solid var(--ifm-color-primary);
+  border-radius: 0 var(--ifm-global-radius) var(--ifm-global-radius) 0;
+  font-weight: 600;
+}
+.markdown h1,
+.markdown h2 {
+  letter-spacing: -0.01em;
+}
+.markdown table {
+  border-radius: var(--ifm-global-radius);
+  overflow: hidden;
+}
+.markdown table thead tr {
+  background: var(--brand-teal);
+  color: #ffffff;
+}
+.markdown table thead th {
+  border-color: var(--brand-teal);
+}
+.theme-admonition {
+  border-radius: var(--ifm-global-radius);
+}
+
+/* The logo has dark text, so give it a white pill on the dark navbar */
+.navbar__brand .navbar__logo {
+  background: #ffffff;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  height: auto;
+  margin-right: 0.75rem;
+}
+.navbar__logo img {
+  height: 1.5rem;
 }
